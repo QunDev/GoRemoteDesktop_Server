@@ -1,0 +1,7 @@
+*.exe
+*.log
+/tmp
+/config
+*.toml
+*.yaml
+*.log.gz
