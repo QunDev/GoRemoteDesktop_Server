@@ -26,7 +26,7 @@ func InitializeApp() (*App, error) {
 		return nil, err
 	}
 	contextContext := context.Background()
-	hub := websocket.NewHub()
+	hub := websocket.NewHub(loggerLogger)
 	app := NewApp(configConfig, loggerLogger, contextContext, hub)
 	return app, nil
 }
