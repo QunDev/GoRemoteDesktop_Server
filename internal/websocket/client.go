@@ -17,6 +17,7 @@ type Client struct {
 
 	send   chan []byte
 	logger logger.Logger
+	role   string
 }
 
 var (
@@ -28,16 +29,17 @@ var allowedOrigins = map[string]bool{
 	"http://localhost:5173": true,
 }
 
-func NewClient(hub *Hub, conn *websocket.Conn, logger logger.Logger) *Client {
+func NewClient(hub *Hub, conn *websocket.Conn, logger logger.Logger, role string) *Client {
 	return &Client{
 		hub:    hub,
 		conn:   conn,
 		send:   make(chan []byte, 256),
 		logger: logger,
+		role:   role,
 	}
 }
 
-func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request, cfg *config.Config, logger logger.Logger) {
+func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request, cfg *config.Config, logger logger.Logger, role string) {
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  cfg.WebSocketConfig.ReadBufferSize,
 		WriteBufferSize: cfg.WebSocketConfig.ReadBufferSize, CheckOrigin: func(r *http.Request) bool {
@@ -52,7 +54,7 @@ func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request, cfg *config.Confi
 		logger.Errorf("websocket upgrade error: %v", err)
 		return
 	}
-	client := NewClient(hub, conn, logger)
+	client := NewClient(hub, conn, logger, role)
 	client.hub.register <- client
 
 	go client.writePump(cfg.WebSocketConfig.PongWait, cfg.WebSocketConfig.WriteWait)
@@ -76,7 +78,9 @@ func (c *Client) readPump(maxMessageSize int64, pongWait time.Duration) {
 			break
 		}
 		message = bytes.TrimSpace(bytes.Replace(message, newline, space, -1))
-		c.hub.broadcast <- message
+		c.hub.broadcast <- map[*Client][]byte{
+			c: message,
+		}
 	}
 }
 
