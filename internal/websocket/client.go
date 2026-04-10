@@ -2,8 +2,8 @@ package websocket
 
 import (
 	"QunDev/GoRemoteDesktop_Server/pkg/config"
+	"QunDev/GoRemoteDesktop_Server/pkg/logger"
 	"bytes"
-	"log"
 	"net/http"
 	"time"
 
@@ -15,7 +15,8 @@ type Client struct {
 
 	conn *websocket.Conn
 
-	send chan []byte
+	send   chan []byte
+	logger logger.Logger
 }
 
 var (
@@ -23,25 +24,35 @@ var (
 	space   = []byte{' '}
 )
 
-func NewClient(hub *Hub, conn *websocket.Conn) *Client {
+var allowedOrigins = map[string]bool{
+	"http://localhost:5173": true,
+}
+
+func NewClient(hub *Hub, conn *websocket.Conn, logger logger.Logger) *Client {
 	return &Client{
-		hub:  hub,
-		conn: conn,
-		send: make(chan []byte, 256),
+		hub:    hub,
+		conn:   conn,
+		send:   make(chan []byte, 256),
+		logger: logger,
 	}
 }
 
-func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request, cfg *config.Config) {
+func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request, cfg *config.Config, logger logger.Logger) {
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  cfg.WebSocketConfig.ReadBufferSize,
-		WriteBufferSize: cfg.WebSocketConfig.ReadBufferSize,
+		WriteBufferSize: cfg.WebSocketConfig.ReadBufferSize, CheckOrigin: func(r *http.Request) bool {
+			if cfg.Server.Development {
+				return true
+			}
+			return allowedOrigins[r.Header.Get("Origin")]
+		},
 	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println(err)
+		logger.Errorf("websocket upgrade error: %v", err)
 		return
 	}
-	client := NewClient(hub, conn)
+	client := NewClient(hub, conn, logger)
 	client.hub.register <- client
 
 	go client.writePump(cfg.WebSocketConfig.PongWait, cfg.WebSocketConfig.WriteWait)
@@ -60,7 +71,7 @@ func (c *Client) readPump(maxMessageSize int64, pongWait time.Duration) {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("error: %v", err)
+				c.logger.Errorf("websocket read error: %v", err)
 			}
 			break
 		}
@@ -97,6 +108,7 @@ func (c *Client) writePump(pongWait, writeWait time.Duration) {
 			}
 
 			if err := w.Close(); err != nil {
+				c.logger.Errorf("websocket write error: %v", err)
 				return
 			}
 		case <-ticker.C:

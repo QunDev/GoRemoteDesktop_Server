@@ -14,7 +14,7 @@ type App struct {
 
 func NewApp(cfg *config.Config, logger logger.Logger, ctx context.Context, hub *socket.Hub) *App {
 	go hub.Run()
-	socket.RegisterHandlers(cfg, hub)
+	socket.RegisterHandlers(cfg, hub, logger)
 	return &App{
 		Logger: logger,
 		Config: cfg,
