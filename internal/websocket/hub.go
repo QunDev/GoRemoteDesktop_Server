@@ -11,9 +11,10 @@ import (
 )
 
 type Hub struct {
-	clients map[string]*Client
-	hosts   map[string]*Client
-	IDs     map[string]struct{}
+	clients       map[string]*Client
+	hosts         map[string]*Client
+	IDs           map[string]struct{}
+	signalSuccess chan map[*Client]*Client // host -> client
 
 	broadcast chan map[*Client]*protocol.Message
 
@@ -25,12 +26,13 @@ type Hub struct {
 
 func NewHub(logger logger.Logger) *Hub {
 	return &Hub{
-		broadcast:  make(chan map[*Client]*protocol.Message),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		clients:    make(map[string]*Client),
-		hosts:      make(map[string]*Client),
-		logger:     logger,
+		broadcast:     make(chan map[*Client]*protocol.Message),
+		register:      make(chan *Client),
+		unregister:    make(chan *Client),
+		clients:       make(map[string]*Client),
+		hosts:         make(map[string]*Client),
+		signalSuccess: make(chan map[*Client]*Client, 256),
+		logger:        logger,
 	}
 }
 
@@ -63,10 +65,13 @@ func (h *Hub) Run() {
 									continue
 								}
 								if host, ok := h.hosts[client.HostID]; ok {
-									host.ClientID = client.ID
+									host.ClientID = id
 									host.send <- &protocol.Message{
 										Type:    protocol.TypeSignal,
 										Payload: p,
+									}
+									h.signalSuccess <- map[*Client]*Client{
+										host: client,
 									}
 									break
 								}
@@ -90,16 +95,52 @@ func (h *Hub) Run() {
 			}
 		case data := <-h.broadcast:
 			for client, message := range data {
-				if client.role == "host" {
-					continue
-				}
 				switch message.Type {
 				case protocol.TypeSignal:
 					if payload, err := protocol.DecodeSignalPayload(message.Payload); err == nil {
-						if host, ok := h.hosts[payload.ID]; ok {
-							host.send <- message
+						for {
+							p, err := json.Marshal(&protocol.SignalPayload{ID: client.ID})
+							if err != nil {
+								h.logger.Error("json marshal err: ", zap.Error(err))
+								continue
+							}
+							if host, ok := h.hosts[payload.ID]; ok {
+								host.ClientID = client.ID
+								host.send <- &protocol.Message{
+									Type:    protocol.TypeSignal,
+									Payload: p,
+								}
+								h.signalSuccess <- map[*Client]*Client{
+									host: client,
+								}
+								break
+							}
 						}
 					}
+				case protocol.TypeOffer:
+					if _, err := protocol.DecodeOfferPayload(message.Payload); err == nil {
+						if c, ok := h.clients[client.ClientID]; ok {
+							c.send <- &protocol.Message{
+								Type:    protocol.TypeOffer,
+								Payload: message.Payload,
+							}
+						}
+					}
+				case protocol.TypeAnswer:
+					if _, err := protocol.DecodeOfferPayload(message.Payload); err == nil {
+						if h, ok := h.hosts[client.ClientID]; ok {
+							h.send <- &protocol.Message{
+								Type:    protocol.TypeAnswer,
+								Payload: message.Payload,
+							}
+						}
+					}
+				}
+			}
+		case signal := <-h.signalSuccess:
+			for server := range signal {
+				server.send <- &protocol.Message{
+					Type: protocol.TypeOffer,
 				}
 			}
 		}
