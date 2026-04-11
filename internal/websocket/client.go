@@ -1,43 +1,46 @@
 package websocket
 
 import (
+	"QunDev/GoRemoteDesktop_Server/internal/protocol"
 	"QunDev/GoRemoteDesktop_Server/pkg/config"
 	"QunDev/GoRemoteDesktop_Server/pkg/logger"
-	"bytes"
+	"encoding/json"
+	"log"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 type Client struct {
-	hub *Hub
+	ID       string
+	HostID   string
+	ClientID string
+	hub      *Hub
 
 	conn *websocket.Conn
 
-	send   chan []byte
+	send   chan *protocol.Message
 	logger logger.Logger
+	role   string
 }
-
-var (
-	newline = []byte{'\n'}
-	space   = []byte{' '}
-)
 
 var allowedOrigins = map[string]bool{
 	"http://localhost:5173": true,
 }
 
-func NewClient(hub *Hub, conn *websocket.Conn, logger logger.Logger) *Client {
+func NewClient(hub *Hub, conn *websocket.Conn, logger logger.Logger, role string) *Client {
 	return &Client{
 		hub:    hub,
 		conn:   conn,
-		send:   make(chan []byte, 256),
+		send:   make(chan *protocol.Message, 256),
 		logger: logger,
+		role:   role,
 	}
 }
 
-func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request, cfg *config.Config, logger logger.Logger) {
+func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request, cfg *config.Config, logger logger.Logger, role string) {
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  cfg.WebSocketConfig.ReadBufferSize,
 		WriteBufferSize: cfg.WebSocketConfig.ReadBufferSize, CheckOrigin: func(r *http.Request) bool {
@@ -52,7 +55,8 @@ func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request, cfg *config.Confi
 		logger.Errorf("websocket upgrade error: %v", err)
 		return
 	}
-	client := NewClient(hub, conn, logger)
+	client := NewClient(hub, conn, logger, role)
+	client.HostID = r.URL.Query().Get("hostid")
 	client.hub.register <- client
 
 	go client.writePump(cfg.WebSocketConfig.PongWait, cfg.WebSocketConfig.WriteWait)
@@ -68,15 +72,15 @@ func (c *Client) readPump(maxMessageSize int64, pongWait time.Duration) {
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 	for {
-		_, message, err := c.conn.ReadMessage()
+		var msg *protocol.Message
+		err := c.conn.ReadJSON(&msg)
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				c.logger.Errorf("websocket read error: %v", err)
-			}
+			log.Println("Error read msg:", err)
 			break
 		}
-		message = bytes.TrimSpace(bytes.Replace(message, newline, space, -1))
-		c.hub.broadcast <- message
+		c.hub.broadcast <- map[*Client]*protocol.Message{
+			c: msg,
+		}
 	}
 }
 
@@ -94,21 +98,13 @@ func (c *Client) writePump(pongWait, writeWait time.Duration) {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-
-			w, err := c.conn.NextWriter(websocket.TextMessage)
+			data, err := json.Marshal(message)
 			if err != nil {
-				return
+				continue
 			}
-			w.Write(message)
-
-			n := len(c.send)
-			for i := 0; i < n; i++ {
-				w.Write(newline)
-				w.Write(<-c.send)
-			}
-
-			if err := w.Close(); err != nil {
-				c.logger.Errorf("websocket write error: %v", err)
+			err = c.conn.WriteMessage(websocket.TextMessage, data)
+			if err != nil {
+				c.logger.Errorf("write json error: %v", err)
 				return
 			}
 		case <-ticker.C:
@@ -118,4 +114,17 @@ func (c *Client) writePump(pongWait, writeWait time.Duration) {
 			}
 		}
 	}
+}
+
+func SetupHostConnection(serverAddr string) (*websocket.Conn, error) {
+	u := url.URL{Scheme: "ws", Host: serverAddr, Path: "/ws", RawQuery: "role=host"}
+
+	log.Println("Connecting to WebSocket Server...")
+
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return conn, nil
 }
