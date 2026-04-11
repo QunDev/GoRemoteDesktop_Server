@@ -5,7 +5,7 @@ const (
 	TypeSignal       = "signal"
 	TypeOffer        = "offer"
 	TypeAnswer       = "answer"
-	TypeCandidate    = "candidate"
+	TypeICECandidate = "ice_candidate"
 
 	TypeMouseMove = "mousemove"
 	TypeMouseDown = "mousedown"

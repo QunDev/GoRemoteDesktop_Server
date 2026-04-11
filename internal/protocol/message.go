@@ -1,6 +1,10 @@
 package protocol
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/pion/webrtc/v4"
+)
 
 type Message struct {
 	Type    string          `json:"type"`
@@ -16,6 +20,14 @@ type OfferPayload struct {
 	SDP  string `json:"sdp"`
 }
 
+type ICECandidatePayload struct {
+	Candidate     string `json:"candidate"`
+	SDPMid        string `json:"sdp_mid"`
+	SDPMLineIndex uint16 `json:"sdp_mline_index"`
+}
+
+type OnICECandidateFunc func(candidate *webrtc.ICECandidate)
+
 func DecodeSignalPayload(d json.RawMessage) (*SignalPayload, error) {
 	var p SignalPayload
 	if err := json.Unmarshal(d, &p); err != nil {
@@ -30,4 +42,9 @@ func DecodeOfferPayload(d json.RawMessage) (*OfferPayload, error) {
 		return nil, err
 	}
 	return &p, nil
+}
+
+func DecodeICECandidatePayload(raw json.RawMessage) (*ICECandidatePayload, error) {
+	var p ICECandidatePayload
+	return &p, json.Unmarshal(raw, &p)
 }

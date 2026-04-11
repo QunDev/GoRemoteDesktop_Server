@@ -4,11 +4,15 @@ import (
 	"QunDev/GoRemoteDesktop_Server/internal/protocol"
 	rtc "QunDev/GoRemoteDesktop_Server/internal/webrtc"
 	socket "QunDev/GoRemoteDesktop_Server/internal/websocket"
-	"encoding/json"
 	"fmt"
 	"log"
 
-	"github.com/gorilla/websocket"
+	"github.com/pion/webrtc/v4"
+)
+
+var (
+	pc *webrtc.PeerConnection
+	ws *rtc.WsWriter
 )
 
 func main() {
@@ -18,6 +22,7 @@ func main() {
 	}
 	defer conn.Close()
 
+	ws = &rtc.WsWriter{Conn: conn}
 	log.Println("Connect successfully")
 
 	for {
@@ -43,30 +48,20 @@ func main() {
 			}
 			fmt.Println("Signal received:", signalPayload.ID)
 		case protocol.TypeOffer:
-			_, desc, err := rtc.CreateHostOffer()
+			pc, err = rtc.HandleCreateOffer(ws)
 			if err != nil {
-				log.Println("Error create host offer:", err)
-				break
+				log.Println("Error handleCreateOffer:", err)
 			}
-			data, err := json.Marshal(protocol.OfferPayload{
-				SDP:  desc.SDP,
-				Type: desc.Type.String(),
-			})
-			if err != nil {
-				fmt.Println("Error encode TypeOffer payload:", err)
-				break
-			}
-			msg := protocol.Message{
-				Type:    protocol.TypeOffer,
-				Payload: data,
-			}
-			msgBytes, err := json.Marshal(msg)
-			if err != nil {
-				fmt.Println("Error encode TypeOffer payload:", err)
-			}
-			conn.WriteMessage(websocket.TextMessage, msgBytes)
 		case protocol.TypeAnswer:
-			fmt.Println("Answer received")
+			if err := rtc.HandleAnswer(msg.Payload, pc); err != nil {
+				log.Println("Error handleAnswer:", err)
+			}
+		case protocol.TypeICECandidate:
+			if err := rtc.HandleRemoteICECandidate(msg.Payload, pc); err != nil {
+				log.Println("Error handleRemoteICECandidate:", err)
+			}
+		default:
+			fmt.Printf("[WS] Unknown msg.Type=%q, payload=%s\n", msg.Type, string(msg.Payload))
 		}
 	}
 }

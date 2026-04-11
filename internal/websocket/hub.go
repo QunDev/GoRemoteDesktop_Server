@@ -118,6 +118,9 @@ func (h *Hub) Run() {
 						}
 					}
 				case protocol.TypeOffer:
+					if client.role == "client" {
+						continue
+					}
 					if _, err := protocol.DecodeOfferPayload(message.Payload); err == nil {
 						if c, ok := h.clients[client.ClientID]; ok {
 							c.send <- &protocol.Message{
@@ -125,14 +128,38 @@ func (h *Hub) Run() {
 								Payload: message.Payload,
 							}
 						}
+					} else {
+						h.logger.Error("json unmarshal err: ", zap.Error(err))
 					}
 				case protocol.TypeAnswer:
 					if _, err := protocol.DecodeOfferPayload(message.Payload); err == nil {
-						if h, ok := h.hosts[client.ClientID]; ok {
+						if h, ok := h.hosts[client.HostID]; ok {
 							h.send <- &protocol.Message{
 								Type:    protocol.TypeAnswer,
 								Payload: message.Payload,
 							}
+						}
+					} else {
+						h.logger.Error("json unmarshal err: ", zap.Error(err))
+					}
+				case protocol.TypeICECandidate:
+					if client.role == "host" {
+						if c, ok := h.clients[client.ClientID]; ok {
+							c.send <- &protocol.Message{
+								Type:    protocol.TypeICECandidate,
+								Payload: message.Payload,
+							}
+						} else {
+							h.logger.Error("ICECandidate: viewer not found", zap.String("clientID", client.ClientID))
+						}
+					} else if client.role == "client" {
+						if host, ok := h.hosts[client.HostID]; ok {
+							host.send <- &protocol.Message{
+								Type:    protocol.TypeICECandidate,
+								Payload: message.Payload,
+							}
+						} else {
+							h.logger.Error("ICECandidate: host not found", zap.String("hostID", client.HostID))
 						}
 					}
 				}
